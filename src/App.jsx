@@ -1072,105 +1072,107 @@ export default function App() {
       <section className="hero-card">
         <div className="hero-copy">
           <p className="eyebrow">SkyCast Weather Studio</p>
-          <h1>Weather with atmosphere, strategy, and a sense of occasion.</h1>
+          <h1>Weather with atmosphere and smarter timing.</h1>
           <p className="intro">
-            Search any city to unlock a cinematic forecast, air-quality signals, a
-            best-time-to-go-out planner, and a living memory of the places you care about.
+            Search any city to see live conditions, date-based forecasts, air quality,
+            and the best window for getting outside.
           </p>
         </div>
 
-        <form className="search-bar" onSubmit={handleSearchSubmit}>
-          <label className="sr-only" htmlFor="city-search">
-            Search city
-          </label>
-          <input
-            id="city-search"
-            type="text"
-            list="location-suggestions"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search city"
-            autoComplete="off"
-          />
-          <datalist id="location-suggestions">
-            {suggestions.map((location) => {
-              const label = buildLocationLabel(location);
-
-              return <option key={`${location.id}-${location.latitude}-${location.longitude}`} value={label} />;
-            })}
-          </datalist>
-
-          <button type="submit" disabled={loading}>
-            {loading ? "Loading..." : "Search"}
-          </button>
-        </form>
-
-        <div className="date-toolbar">
-          <div className="date-field">
-            <label htmlFor="weather-date">Choose a date</label>
+        <div className="hero-controls">
+          <form className="search-bar" onSubmit={handleSearchSubmit}>
+            <label className="sr-only" htmlFor="city-search">
+              Search city
+            </label>
             <input
-              id="weather-date"
-              type="date"
-              value={selectedDate}
-              min={minSelectableDate}
-              max={maxSelectableDate}
-              onChange={(event) => handleDateSelection(event.target.value)}
+              id="city-search"
+              type="text"
+              list="location-suggestions"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search city"
+              autoComplete="off"
             />
-          </div>
+            <datalist id="location-suggestions">
+              {suggestions.map((location) => {
+                const label = buildLocationLabel(location);
 
-          <div className="date-button-row">
-            <button
-              className="date-button"
-              type="button"
-              onClick={() => handleDateSelection(shiftIsoDate(selectedDate, -1))}
-              disabled={loading || selectedDate === minSelectableDate}
-            >
-              Previous day
+                return <option key={`${location.id}-${location.latitude}-${location.longitude}`} value={label} />;
+              })}
+            </datalist>
+
+            <button type="submit" disabled={loading}>
+              {loading ? "Loading..." : "Search"}
             </button>
-            <button
-              className="date-button"
-              type="button"
-              onClick={() => handleDateSelection(todayDate)}
-              disabled={loading || selectedDate === todayDate}
-            >
-              Today
-            </button>
-            <button
-              className="date-button"
-              type="button"
-              onClick={() => handleDateSelection(shiftIsoDate(selectedDate, 1))}
-              disabled={loading || selectedDate === maxSelectableDate}
-            >
-              Next day
-            </button>
-          </div>
-        </div>
+          </form>
 
-        <p className="date-hint">
-          Browse weather from {formatFullDisplayDate(minSelectableDate)} through{" "}
-          {formatFullDisplayDate(maxSelectableDate)}.
-        </p>
-
-        <div className="hero-actions">
-          <button className="location-button" type="button" onClick={handleUseCurrentLocation}>
-            Use my location
-          </button>
-
-          {recentLocations.length ? (
-            <div className="recent-strip">
-              <span className="recent-label">Recent</span>
-              {recentLocations.map((location) => (
-                <button
-                  className="recent-chip"
-                  key={`${location.label}-${location.latitude}-${location.longitude}`}
-                  type="button"
-                  onClick={() => handleRecentLocationSelect(location)}
-                >
-                  {location.label}
-                </button>
-              ))}
+          <div className="date-toolbar">
+            <div className="date-field">
+              <label htmlFor="weather-date">Choose a date</label>
+              <input
+                id="weather-date"
+                type="date"
+                value={selectedDate}
+                min={minSelectableDate}
+                max={maxSelectableDate}
+                onChange={(event) => handleDateSelection(event.target.value)}
+              />
             </div>
-          ) : null}
+
+            <div className="date-button-row">
+              <button
+                className="date-button"
+                type="button"
+                onClick={() => handleDateSelection(shiftIsoDate(selectedDate, -1))}
+                disabled={loading || selectedDate === minSelectableDate}
+              >
+                Previous day
+              </button>
+              <button
+                className="date-button"
+                type="button"
+                onClick={() => handleDateSelection(todayDate)}
+                disabled={loading || selectedDate === todayDate}
+              >
+                Today
+              </button>
+              <button
+                className="date-button"
+                type="button"
+                onClick={() => handleDateSelection(shiftIsoDate(selectedDate, 1))}
+                disabled={loading || selectedDate === maxSelectableDate}
+              >
+                Next day
+              </button>
+            </div>
+          </div>
+
+          <p className="date-hint">
+            Browse weather from {formatFullDisplayDate(minSelectableDate)} through{" "}
+            {formatFullDisplayDate(maxSelectableDate)}.
+          </p>
+
+          <div className="hero-actions">
+            <button className="location-button" type="button" onClick={handleUseCurrentLocation}>
+              Use my location
+            </button>
+
+            {recentLocations.length ? (
+              <div className="recent-strip">
+                <span className="recent-label">Recent</span>
+                {recentLocations.map((location) => (
+                  <button
+                    className="recent-chip"
+                    key={`${location.label}-${location.latitude}-${location.longitude}`}
+                    type="button"
+                    onClick={() => handleRecentLocationSelect(location)}
+                  >
+                    {location.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
       </section>
 

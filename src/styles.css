@@ -142,11 +142,17 @@ input {
   animation: rise-in 700ms ease-out both;
 }
 
+.hero-copy {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
 .hero-copy h1 {
-  margin: 6px 0 10px;
-  max-width: 12ch;
-  font-size: clamp(2.3rem, 6vw, 4.8rem);
-  line-height: 0.95;
+  margin: 4px 0 0;
+  max-width: 16ch;
+  font-size: clamp(2rem, 4.8vw, 3.6rem);
+  line-height: 0.98;
   letter-spacing: -0.06em;
 }
 
@@ -161,9 +167,16 @@ input {
 
 .intro {
   margin: 0;
-  max-width: 42rem;
+  max-width: 34rem;
   color: var(--muted);
-  font-size: 1.02rem;
+  font-size: 0.98rem;
+  line-height: 1.55;
+}
+
+.hero-controls {
+  display: grid;
+  gap: 16px;
+  align-content: start;
 }
 
 .hero-actions {
@@ -766,6 +779,14 @@ input {
   }
 }
 
+@media (min-width: 980px) {
+  .hero-card {
+    grid-template-columns: minmax(0, 1.15fr) minmax(380px, 0.85fr);
+    align-items: start;
+    gap: 28px;
+  }
+}
+
 @media (max-width: 759px) {
   .app-shell {
     padding: 20px 14px 40px;
@@ -803,6 +824,10 @@ input {
 
   .summary-badge {
     white-space: normal;
+  }
+
+  .hero-copy h1 {
+    max-width: none;
   }
 
   .card-header {
