@@ -11,6 +11,8 @@ const geocodeBaseUrl = "https://geocoding-api.open-meteo.com/v1";
 const forecastBaseUrl = "https://api.open-meteo.com/v1/forecast";
 const airQualityBaseUrl = "https://air-quality-api.open-meteo.com/v1/air-quality";
 const recentLocationsStorageKey = "skycast-recent-locations";
+const maxPastWeatherDays = 92;
+const maxFutureWeatherDays = 16;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -39,6 +41,76 @@ function formatHourLabel(timestamp) {
 
 function formatDurationHours(seconds) {
   return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+function formatFullDisplayDate(date) {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(new Date(`${date}T12:00:00`));
+}
+
+function formatInputDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseIsoDate(value) {
+  return new Date(`${value}T12:00:00`);
+}
+
+function getTodayDateValue() {
+  return formatInputDate(new Date());
+}
+
+function shiftIsoDate(value, days) {
+  const shiftedDate = parseIsoDate(value);
+  shiftedDate.setDate(shiftedDate.getDate() + days);
+  return formatInputDate(shiftedDate);
+}
+
+function compareIsoDate(left, right) {
+  return left.localeCompare(right);
+}
+
+function clampIsoDate(value, minDate, maxDate) {
+  if (compareIsoDate(value, minDate) < 0) {
+    return minDate;
+  }
+
+  if (compareIsoDate(value, maxDate) > 0) {
+    return maxDate;
+  }
+
+  return value;
+}
+
+function getDateDifferenceInDays(referenceDate, targetDate) {
+  const millisecondsPerDay = 1000 * 60 * 60 * 24;
+  return Math.round((parseIsoDate(targetDate) - parseIsoDate(referenceDate)) / millisecondsPerDay);
+}
+
+function buildDateWindow(selectedDate, minDate, maxDate, windowSize = 5) {
+  let startDate = shiftIsoDate(selectedDate, -Math.floor(windowSize / 2));
+  let endDate = shiftIsoDate(startDate, windowSize - 1);
+
+  if (compareIsoDate(startDate, minDate) < 0) {
+    startDate = minDate;
+    endDate = shiftIsoDate(startDate, windowSize - 1);
+  }
+
+  if (compareIsoDate(endDate, maxDate) > 0) {
+    endDate = maxDate;
+    startDate = shiftIsoDate(endDate, -(windowSize - 1));
+  }
+
+  return {
+    startDate: clampIsoDate(startDate, minDate, maxDate),
+    endDate: clampIsoDate(endDate, minDate, maxDate),
+  };
 }
 
 function buildLocationLabel(location) {
@@ -207,7 +279,7 @@ function scoreOutdoorConditions({ feelsLike, precipitationChance, windSpeed, aqi
   return clamp(Math.round(score), 0, 100);
 }
 
-function getDaylightProgress(currentTime, sunrise, sunset) {
+function getDaylightProgress(currentTime, sunrise, sunset, isToday) {
   const current = new Date(currentTime).getTime();
   const start = new Date(sunrise).getTime();
   const end = new Date(sunset).getTime();
@@ -222,21 +294,23 @@ function getDaylightProgress(currentTime, sunrise, sunset) {
   if (current <= start) {
     return {
       progress: 0,
-      message: "Sunrise is still ahead.",
+      message: isToday ? "Sunrise is still ahead." : "This snapshot lands before sunrise.",
     };
   }
 
   if (current >= end) {
     return {
       progress: 100,
-      message: "The sun has already set for today.",
+      message: isToday ? "The sun has already set for today." : "This snapshot lands after sunset.",
     };
   }
 
   const progress = ((current - start) / (end - start)) * 100;
   return {
     progress,
-    message: `${Math.round(progress)}% of daylight has passed.`,
+    message: isToday
+      ? `${Math.round(progress)}% of daylight has passed.`
+      : `${Math.round(progress)}% of daylight had unfolded by this snapshot.`,
   };
 }
 
@@ -292,33 +366,49 @@ async function fetchLocationsByQuery(query, count, signal) {
   return data.results ?? [];
 }
 
-async function fetchWeatherByCoordinates(latitude, longitude, signal) {
+async function fetchWeatherByCoordinates(
+  latitude,
+  longitude,
+  { startDate, endDate, includeCurrent },
+  signal,
+) {
   const url = new URL(forecastBaseUrl);
   url.searchParams.set("latitude", latitude);
   url.searchParams.set("longitude", longitude);
+  url.searchParams.set("start_date", startDate);
+  url.searchParams.set("end_date", endDate);
+
+  if (includeCurrent) {
+    url.searchParams.set(
+      "current",
+      [
+        "temperature_2m",
+        "relative_humidity_2m",
+        "apparent_temperature",
+        "is_day",
+        "precipitation",
+        "weather_code",
+        "wind_speed_10m",
+        "wind_gusts_10m",
+        "wind_direction_10m",
+        "cloud_cover",
+      ].join(","),
+    );
+  }
+
   url.searchParams.set(
-    "current",
+    "hourly",
     [
       "temperature_2m",
       "relative_humidity_2m",
       "apparent_temperature",
-      "is_day",
       "precipitation",
+      "precipitation_probability",
       "weather_code",
       "wind_speed_10m",
       "wind_gusts_10m",
       "wind_direction_10m",
       "cloud_cover",
-    ].join(","),
-  );
-  url.searchParams.set(
-    "hourly",
-    [
-      "temperature_2m",
-      "apparent_temperature",
-      "precipitation_probability",
-      "weather_code",
-      "wind_speed_10m",
       "uv_index",
       "is_day",
     ].join(","),
@@ -339,8 +429,6 @@ async function fetchWeatherByCoordinates(latitude, longitude, signal) {
       "precipitation_sum",
     ].join(","),
   );
-  url.searchParams.set("forecast_days", "5");
-  url.searchParams.set("forecast_hours", "24");
   url.searchParams.set("timezone", "auto");
 
   const response = await fetch(url, { signal });
@@ -352,13 +440,14 @@ async function fetchWeatherByCoordinates(latitude, longitude, signal) {
   return response.json();
 }
 
-async function fetchAirQualityByCoordinates(latitude, longitude, signal) {
+async function fetchAirQualityByCoordinates(latitude, longitude, date, signal) {
   const url = new URL(airQualityBaseUrl);
   url.searchParams.set("latitude", latitude);
   url.searchParams.set("longitude", longitude);
   url.searchParams.set("current", "us_aqi,pm2_5");
-  url.searchParams.set("hourly", "us_aqi");
-  url.searchParams.set("forecast_hours", "12");
+  url.searchParams.set("hourly", "us_aqi,pm2_5");
+  url.searchParams.set("start_date", date);
+  url.searchParams.set("end_date", date);
   url.searchParams.set("timezone", "auto");
 
   const response = await fetch(url, { signal });
@@ -431,18 +520,59 @@ function summarizeHourly(hourly, airQualityHourly) {
   return hourly.time.map((time, index) => ({
     time,
     temperature: Math.round(hourly.temperature_2m[index]),
+    humidity: Math.round(hourly.relative_humidity_2m[index]),
     feelsLike: Math.round(hourly.apparent_temperature[index]),
+    precipitation: Math.round((hourly.precipitation[index] ?? 0) * 10) / 10,
     precipitationChance: hourly.precipitation_probability[index],
     weatherCode: hourly.weather_code[index],
     windSpeed: Math.round(hourly.wind_speed_10m[index]),
+    windGusts: Math.round(hourly.wind_gusts_10m[index]),
+    windDirection: getCompassDirection(hourly.wind_direction_10m[index]),
+    cloudCover: hourly.cloud_cover[index],
     uvIndex: Math.round(hourly.uv_index[index] ?? 0),
     isDay: Boolean(hourly.is_day[index]),
     aqi: airQualityHourly?.us_aqi?.[index] ?? null,
+    pm25:
+      airQualityHourly?.pm2_5?.[index] != null
+        ? Math.round(airQualityHourly.pm2_5[index] * 10) / 10
+        : null,
   }));
 }
 
-function selectBestWindow(hourlyForecast) {
-  const windowCandidates = hourlyForecast.slice(0, 12);
+function selectSnapshotHour(hourlyForecast, selectedDate, isToday) {
+  if (!hourlyForecast.length) {
+    return null;
+  }
+
+  const targetTime = isToday ? Date.now() : new Date(`${selectedDate}T12:00:00`).getTime();
+
+  return hourlyForecast.reduce((closestHour, hour) => {
+    if (!closestHour) {
+      return hour;
+    }
+
+    const currentDelta = Math.abs(new Date(hour.time).getTime() - targetTime);
+    const closestDelta = Math.abs(new Date(closestHour.time).getTime() - targetTime);
+    return currentDelta < closestDelta ? hour : closestHour;
+  }, null);
+}
+
+function selectBestWindow(hourlyForecast, isToday) {
+  let windowCandidates = hourlyForecast;
+
+  if (isToday) {
+    const now = Date.now();
+    windowCandidates = hourlyForecast
+      .filter((hour) => new Date(hour.time).getTime() >= now - 30 * 60 * 1000)
+      .slice(0, 12);
+
+    if (!windowCandidates.length) {
+      windowCandidates = hourlyForecast.slice(-12);
+    }
+  } else {
+    const daylightCandidates = hourlyForecast.filter((hour) => hour.isDay);
+    windowCandidates = daylightCandidates.length ? daylightCandidates : hourlyForecast;
+  }
 
   if (!windowCandidates.length) {
     return null;
@@ -465,7 +595,35 @@ function selectBestWindow(hourlyForecast) {
   return rankedCandidates[0] ?? null;
 }
 
-function buildWeatherStory(current, today, airQualityDetails, bestWindow, outdoorScore) {
+function buildDateSelection(selectedDate, todayDate, snapshotTime) {
+  const dayDifference = getDateDifferenceInDays(todayDate, selectedDate);
+  const relativeLabel =
+    dayDifference === 0
+      ? "Today"
+      : dayDifference === 1
+        ? "Tomorrow"
+        : dayDifference === -1
+          ? "Yesterday"
+          : formatFullDisplayDate(selectedDate);
+
+  return {
+    date: selectedDate,
+    displayDate: formatFullDisplayDate(selectedDate),
+    shortLabel: relativeLabel,
+    isToday: dayDifference === 0,
+    currentCardLabel: dayDifference === 0 ? "Now in" : "Selected day in",
+    timestampLabel:
+      dayDifference === 0
+        ? `Live at ${formatDisplayTime(snapshotTime)}`
+        : `${formatFullDisplayDate(selectedDate)} · Snapshot ${formatDisplayTime(snapshotTime)}`,
+    studioHeading:
+      dayDifference === 0
+        ? "Today by the hour"
+        : `${formatDisplayDate(selectedDate)} by the hour`,
+  };
+}
+
+function buildWeatherStory(current, today, airQualityDetails, bestWindow, outdoorScore, selection) {
   const temperatureTone =
     current.feelsLike <= 0
       ? "crisp"
@@ -477,15 +635,19 @@ function buildWeatherStory(current, today, airQualityDetails, bestWindow, outdoo
 
   const windowCopy = bestWindow
     ? `Best outdoor window is around ${formatHourLabel(bestWindow.time)}.`
-    : "The next few hours are still stabilizing.";
+    : selection.isToday
+      ? "The next few hours are still stabilizing."
+      : "The strongest stretch is still a little harder to call.";
 
   return {
-    headline: `${temperatureTone[0].toUpperCase()}${temperatureTone.slice(1)} conditions, ${outdoorScore.label.toLowerCase()} outdoor momentum.`,
-    summary: `${current.summary} right now with a high of ${today.high}&deg;C, ${today.precipitationChance}% rain risk, and ${airQualityDetails.label.toLowerCase()} air. ${windowCopy}`,
+    headline: `${temperatureTone[0].toUpperCase()}${temperatureTone.slice(1)} conditions for ${selection.shortLabel.toLowerCase()}, ${outdoorScore.label.toLowerCase()} outdoor momentum.`,
+    summary: `${current.summary} ${
+      selection.isToday ? "right now" : `around ${formatDisplayTime(current.time)}`
+    } with a high of ${today.high}&deg;C, ${today.precipitationChance}% rain risk, and ${airQualityDetails.label.toLowerCase()} air. ${windowCopy}`,
   };
 }
 
-function buildConciergeItems(current, today, airQualityDetails, bestWindow, outdoorScore) {
+function buildConciergeItems(current, today, airQualityDetails, bestWindow, outdoorScore, selection) {
   const wardrobeCopy =
     current.feelsLike <= 2
       ? "Reach for a proper layer stack. It will feel colder than the headline temperature."
@@ -513,7 +675,7 @@ function buildConciergeItems(current, today, airQualityDetails, bestWindow, outd
     },
     {
       title: "Planner",
-      body: `${bestWindowCopy} Overall outdoor score today is ${outdoorScore.value}/100.`,
+      body: `${bestWindowCopy} Overall outdoor score for ${selection.shortLabel.toLowerCase()} is ${outdoorScore.value}/100.`,
     },
     {
       title: "Air & Light",
@@ -523,12 +685,17 @@ function buildConciergeItems(current, today, airQualityDetails, bestWindow, outd
 }
 
 export default function App() {
+  const todayDate = getTodayDateValue();
+  const minSelectableDate = shiftIsoDate(todayDate, -maxPastWeatherDays);
+  const maxSelectableDate = shiftIsoDate(todayDate, maxFutureWeatherDays);
   const [query, setQuery] = useState("Toronto");
+  const [selectedDate, setSelectedDate] = useState(todayDate);
   const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [recentLocations, setRecentLocations] = useState(loadRecentLocationsFromStorage);
+  const [activeLocation, setActiveLocation] = useState(null);
   const activeRequest = useRef(null);
   const activeSuggestionRequest = useRef(null);
   const deferredQuery = useDeferredValue(query);
@@ -541,14 +708,16 @@ export default function App() {
     window.localStorage.setItem(recentLocationsStorageKey, JSON.stringify(recentLocations));
   }, [recentLocations]);
 
-  async function loadWeather({ search, latitude, longitude, sourceLabel }) {
+  async function loadWeather({ search, latitude, longitude, sourceLabel, date = selectedDate }) {
     activeRequest.current?.abort();
 
     const controller = new AbortController();
     activeRequest.current = controller;
+    const requestedDate = clampIsoDate(date, minSelectableDate, maxSelectableDate);
 
     setLoading(true);
     setError("");
+    setSelectedDate(requestedDate);
 
     try {
       let location = null;
@@ -573,31 +742,98 @@ export default function App() {
         throw new Error("No matching location was found. Try a different city.");
       }
 
+      const { startDate, endDate } = buildDateWindow(
+        requestedDate,
+        minSelectableDate,
+        maxSelectableDate,
+      );
+      const isToday = requestedDate === todayDate;
       const forecast = await fetchWeatherByCoordinates(
         location.latitude ?? latitude,
         location.longitude ?? longitude,
+        { startDate, endDate, includeCurrent: isToday },
         controller.signal,
       );
       const airQuality = await fetchAirQualityByCoordinates(
         location.latitude ?? latitude,
         location.longitude ?? longitude,
+        requestedDate,
         controller.signal,
       ).catch(() => null);
-      const details = getWeatherDetails(forecast.current.weather_code);
       const dailyForecast = summarizeForecast(forecast.daily);
-      const today = dailyForecast[0];
-      const hourlyForecast = summarizeHourly(forecast.hourly, airQuality?.hourly);
-      const bestWindow = selectBestWindow(hourlyForecast);
-      const airQualityDetails = getAqiDetails(
-        airQuality?.current?.us_aqi != null ? Math.round(airQuality.current.us_aqi) : null,
+      const selectedDay = dailyForecast.find((day) => day.date === requestedDate) ?? dailyForecast[0];
+      const hourlyForecast = summarizeHourly(forecast.hourly, airQuality?.hourly).filter((hour) =>
+        hour.time.startsWith(requestedDate),
       );
+
+      if (!selectedDay || !hourlyForecast.length) {
+        throw new Error("Weather for that date is unavailable right now.");
+      }
+
+      const snapshotHour = selectSnapshotHour(hourlyForecast, requestedDate, isToday);
+
+      if (!snapshotHour) {
+        throw new Error("Weather for that date is unavailable right now.");
+      }
+
+      const useLiveCurrent = Boolean(isToday && forecast.current);
+      const selectedAirQuality =
+        isToday && airQuality?.current?.us_aqi != null
+          ? {
+              aqi: Math.round(airQuality.current.us_aqi),
+              pm25: Math.round(airQuality.current.pm2_5 * 10) / 10,
+            }
+          : snapshotHour.aqi != null
+            ? {
+                aqi: Math.round(snapshotHour.aqi),
+                pm25: snapshotHour.pm25,
+              }
+            : null;
+      const currentWeatherCode = isToday
+        ? forecast.current?.weather_code ?? snapshotHour.weatherCode
+        : snapshotHour.weatherCode;
+      const details = getWeatherDetails(currentWeatherCode);
+      const bestWindow = selectBestWindow(hourlyForecast, isToday);
+      const airQualityDetails = getAqiDetails(
+        selectedAirQuality?.aqi ?? null,
+      );
+      const currentConditions = useLiveCurrent
+        ? {
+            temperature: Math.round(forecast.current.temperature_2m),
+            feelsLike: Math.round(forecast.current.apparent_temperature),
+            humidity: forecast.current.relative_humidity_2m,
+            windSpeed: Math.round(forecast.current.wind_speed_10m),
+            windGusts: Math.round(forecast.current.wind_gusts_10m),
+            windDirection: getCompassDirection(forecast.current.wind_direction_10m),
+            precipitation: forecast.current.precipitation,
+            isDay: Boolean(forecast.current.is_day),
+            summary: details.label,
+            accent: details.accent,
+            cloudCover: forecast.current.cloud_cover,
+            time: forecast.current.time,
+          }
+        : {
+            temperature: snapshotHour.temperature,
+            feelsLike: snapshotHour.feelsLike,
+            humidity: snapshotHour.humidity,
+            windSpeed: snapshotHour.windSpeed,
+            windGusts: snapshotHour.windGusts,
+            windDirection: snapshotHour.windDirection,
+            precipitation: snapshotHour.precipitation,
+            isDay: snapshotHour.isDay,
+            summary: details.label,
+            accent: details.accent,
+            cloudCover: snapshotHour.cloudCover,
+            time: snapshotHour.time,
+          };
+      const selection = buildDateSelection(requestedDate, todayDate, currentConditions.time);
       const outdoorScoreValue = scoreOutdoorConditions({
-        feelsLike: Math.round(forecast.current.apparent_temperature),
-        precipitationChance: today?.precipitationChance ?? 0,
-        windSpeed: Math.round(forecast.current.wind_speed_10m),
-        aqi: airQuality?.current?.us_aqi ?? null,
-        uvIndex: today?.uvMax ?? 0,
-        isDay: Boolean(forecast.current.is_day),
+        feelsLike: currentConditions.feelsLike,
+        precipitationChance: selectedDay.precipitationChance ?? 0,
+        windSpeed: currentConditions.windSpeed,
+        aqi: selectedAirQuality?.aqi ?? null,
+        uvIndex: selectedDay.uvMax ?? 0,
+        isDay: currentConditions.isDay,
       });
       const outdoorScore = {
         value: outdoorScoreValue,
@@ -612,21 +848,24 @@ export default function App() {
       const story = buildWeatherStory(
         {
           summary: details.label,
-          feelsLike: Math.round(forecast.current.apparent_temperature),
+          feelsLike: currentConditions.feelsLike,
+          time: currentConditions.time,
         },
-        today,
+        selectedDay,
         airQualityDetails,
         bestWindow,
         outdoorScore,
+        selection,
       );
       const concierge = buildConciergeItems(
         {
-          feelsLike: Math.round(forecast.current.apparent_temperature),
+          feelsLike: currentConditions.feelsLike,
         },
-        today,
+        selectedDay,
         airQualityDetails,
         bestWindow,
         outdoorScore,
+        selection,
       );
       const locationName = buildLocationLabel(location);
       const recentLocation = {
@@ -637,38 +876,35 @@ export default function App() {
 
       setWeather({
         locationName,
-        current: {
-          temperature: Math.round(forecast.current.temperature_2m),
-          feelsLike: Math.round(forecast.current.apparent_temperature),
-          humidity: forecast.current.relative_humidity_2m,
-          windSpeed: Math.round(forecast.current.wind_speed_10m),
-          windGusts: Math.round(forecast.current.wind_gusts_10m),
-          windDirection: getCompassDirection(forecast.current.wind_direction_10m),
-          precipitation: forecast.current.precipitation,
-          isDay: Boolean(forecast.current.is_day),
-          summary: details.label,
-          accent: details.accent,
-          cloudCover: forecast.current.cloud_cover,
-          time: forecast.current.time,
+        selection,
+        coordinates: {
+          latitude: location.latitude ?? latitude,
+          longitude: location.longitude ?? longitude,
         },
-        today,
+        current: currentConditions,
+        today: selectedDay,
         forecast: dailyForecast,
         hourly: hourlyForecast,
-        airQuality: airQuality
+        airQuality: selectedAirQuality
           ? {
-              aqi: Math.round(airQuality.current.us_aqi),
-              pm25: Math.round(airQuality.current.pm2_5 * 10) / 10,
+              ...selectedAirQuality,
               details: airQualityDetails,
             }
           : null,
         outdoorScore,
-        daylight: getDaylightProgress(forecast.current.time, today.sunrise, today.sunset),
+        daylight: getDaylightProgress(
+          currentConditions.time,
+          selectedDay.sunrise,
+          selectedDay.sunset,
+          isToday,
+        ),
         bestWindow,
         story,
         concierge,
       });
 
       setQuery(locationName);
+      setActiveLocation(recentLocation);
 
       if (locationName !== "Current location") {
         setRecentLocations((currentRecentLocations) =>
@@ -688,7 +924,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadWeather({ search: "Toronto" });
+    loadWeather({ search: "Toronto", date: todayDate });
 
     return () => {
       activeRequest.current?.abort();
@@ -757,11 +993,12 @@ export default function App() {
         latitude: matchedSuggestion.latitude,
         longitude: matchedSuggestion.longitude,
         sourceLabel: buildLocationLabel(matchedSuggestion),
+        date: selectedDate,
       });
       return;
     }
 
-    loadWeather({ search: trimmedQuery });
+    loadWeather({ search: trimmedQuery, date: selectedDate });
   }
 
   function handleUseCurrentLocation() {
@@ -778,6 +1015,7 @@ export default function App() {
         loadWeather({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
+          date: selectedDate,
         });
       },
       () => {
@@ -794,6 +1032,30 @@ export default function App() {
       latitude: location.latitude,
       longitude: location.longitude,
       sourceLabel: location.label,
+      date: selectedDate,
+    });
+  }
+
+  function handleDateSelection(nextDate) {
+    if (!nextDate) {
+      return;
+    }
+
+    const normalizedDate = clampIsoDate(nextDate, minSelectableDate, maxSelectableDate);
+
+    if (activeLocation) {
+      loadWeather({
+        latitude: activeLocation.latitude,
+        longitude: activeLocation.longitude,
+        sourceLabel: activeLocation.label,
+        date: normalizedDate,
+      });
+      return;
+    }
+
+    loadWeather({
+      search: query.trim() || "Toronto",
+      date: normalizedDate,
     });
   }
 
@@ -843,6 +1105,52 @@ export default function App() {
           </button>
         </form>
 
+        <div className="date-toolbar">
+          <div className="date-field">
+            <label htmlFor="weather-date">Choose a date</label>
+            <input
+              id="weather-date"
+              type="date"
+              value={selectedDate}
+              min={minSelectableDate}
+              max={maxSelectableDate}
+              onChange={(event) => handleDateSelection(event.target.value)}
+            />
+          </div>
+
+          <div className="date-button-row">
+            <button
+              className="date-button"
+              type="button"
+              onClick={() => handleDateSelection(shiftIsoDate(selectedDate, -1))}
+              disabled={loading || selectedDate === minSelectableDate}
+            >
+              Previous day
+            </button>
+            <button
+              className="date-button"
+              type="button"
+              onClick={() => handleDateSelection(todayDate)}
+              disabled={loading || selectedDate === todayDate}
+            >
+              Today
+            </button>
+            <button
+              className="date-button"
+              type="button"
+              onClick={() => handleDateSelection(shiftIsoDate(selectedDate, 1))}
+              disabled={loading || selectedDate === maxSelectableDate}
+            >
+              Next day
+            </button>
+          </div>
+        </div>
+
+        <p className="date-hint">
+          Browse weather from {formatFullDisplayDate(minSelectableDate)} through{" "}
+          {formatFullDisplayDate(maxSelectableDate)}.
+        </p>
+
         <div className="hero-actions">
           <button className="location-button" type="button" onClick={handleUseCurrentLocation}>
             Use my location
@@ -873,9 +1181,9 @@ export default function App() {
           <section className="current-weather-card surface">
             <div className="current-weather-header">
               <div>
-                <p className="section-label">Now in</p>
+                <p className="section-label">{weather.selection.currentCardLabel}</p>
                 <h2>{weather.locationName}</h2>
-                <p className="current-time">Updated {formatDisplayTime(weather.current.time)}</p>
+                <p className="current-time">{weather.selection.timestampLabel}</p>
               </div>
               <span className="summary-badge">{weather.current.summary}</span>
             </div>
@@ -979,7 +1287,7 @@ export default function App() {
               <div className="card-header">
                 <div>
                   <p className="section-label">Weather Studio</p>
-                  <h3>Next 24 hours</h3>
+                  <h3>{weather.selection.studioHeading}</h3>
                 </div>
                 <div className="window-pill">
                   {weather.bestWindow
@@ -1036,10 +1344,16 @@ export default function App() {
 
               <p className="concierge-lead">
                 {weather.bestWindow
-                  ? `Your strongest outside window is around ${formatHourLabel(
+                  ? `${
+                      weather.selection.isToday
+                        ? "Your strongest outside window is around"
+                        : `On ${weather.selection.displayDate}, the strongest outside window looks to be around`
+                    } ${formatHourLabel(
                       weather.bestWindow.time,
                     )}, when the conditions look most comfortable.`
-                  : "Conditions are moving around, so it is worth another look later today."}
+                  : weather.selection.isToday
+                    ? "Conditions are moving around, so it is worth another look later today."
+                    : "This day stays a little more mixed, so it helps to keep plans flexible."}
               </p>
 
               <div className="concierge-list">
@@ -1056,9 +1370,17 @@ export default function App() {
           <section className="forecast-grid">
             {weather.forecast.map((day, index) => {
               const details = getWeatherDetails(day.weatherCode);
+              const isActiveDay = day.date === weather.selection.date;
 
               return (
-                <article className="forecast-card surface" key={day.date} style={{ animationDelay: `${index * 90}ms` }}>
+                <button
+                  className={`forecast-card ${isActiveDay ? "is-active" : ""}`}
+                  key={day.date}
+                  type="button"
+                  style={{ animationDelay: `${index * 90}ms` }}
+                  onClick={() => handleDateSelection(day.date)}
+                  aria-pressed={isActiveDay}
+                >
                   <p className="forecast-date">{formatDisplayDate(day.date)}</p>
                   <h3>{details.label}</h3>
                   <p className="forecast-temp">
@@ -1069,7 +1391,7 @@ export default function App() {
                   <p className="forecast-meta">UV max: {day.uvMax}</p>
                   <p className="forecast-meta">Wind max: {day.windMax} km/h</p>
                   <p className="forecast-meta">Sunshine: {day.sunshineHours}</p>
-                </article>
+                </button>
               );
             })}
           </section>

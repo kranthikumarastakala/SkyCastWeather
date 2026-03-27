@@ -171,6 +171,80 @@ input {
   gap: 14px;
 }
 
+.date-toolbar {
+  display: grid;
+  gap: 14px;
+}
+
+.date-field {
+  display: grid;
+  gap: 8px;
+  max-width: 260px;
+}
+
+.date-field label {
+  font-size: 0.86rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.date-field input {
+  min-width: 0;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(24, 48, 71, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+}
+
+.date-field input:focus {
+  outline: 2px solid rgba(29, 111, 165, 0.28);
+  outline-offset: 2px;
+}
+
+.date-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.date-button {
+  border: 0;
+  border-radius: 18px;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--accent-strong);
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    background-color 180ms ease;
+}
+
+.date-button:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.date-button:focus-visible,
+.forecast-card:focus-visible {
+  outline: 2px solid rgba(29, 111, 165, 0.32);
+  outline-offset: 3px;
+}
+
+.date-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+}
+
+.date-hint {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
 .recent-strip {
   display: flex;
   flex-wrap: wrap;
@@ -374,7 +448,28 @@ input {
 }
 
 .forecast-card {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.42);
   animation: rise-in 820ms ease-out both;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.forecast-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.forecast-card.is-active {
+  border-color: rgba(29, 111, 165, 0.5);
+  box-shadow: 0 12px 30px rgba(23, 64, 102, 0.14);
+  background: rgba(255, 255, 255, 0.84);
 }
 
 .forecast-date {
@@ -686,11 +781,15 @@ input {
     grid-template-columns: 1fr;
   }
 
+  .date-field {
+    max-width: none;
+  }
+
   .current-weather-header {
     flex-direction: column;
   }
 
-   .hero-actions {
+  .hero-actions {
     gap: 12px;
   }
 
