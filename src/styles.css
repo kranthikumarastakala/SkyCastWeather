@@ -212,6 +212,7 @@ input {
   background: var(--surface-soft);
   border: 1px solid var(--border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  max-width: 860px;
 }
 
 .hero-highlights {
@@ -861,14 +862,6 @@ input {
   }
 }
 
-@media (min-width: 980px) {
-  .hero-card {
-    grid-template-columns: minmax(0, 1.15fr) minmax(380px, 0.85fr);
-    align-items: start;
-    gap: 28px;
-  }
-}
-
 @media (max-width: 759px) {
   .app-shell {
     padding: 20px 14px 40px;
@@ -895,6 +888,10 @@ input {
 
   .hero-highlights {
     grid-template-columns: 1fr;
+  }
+
+  .hero-controls {
+    max-width: none;
   }
 
   .current-weather-header {
