@@ -1071,12 +1071,38 @@ export default function App() {
 
       <section className="hero-card">
         <div className="hero-copy">
-          <p className="eyebrow">SkyCast Weather Studio</p>
-          <h1>Weather with atmosphere and smarter timing.</h1>
+          <div className="brand-row">
+            <p className="eyebrow">SkyCast</p>
+            {weather ? (
+              <span className="hero-status">
+                {weather.selection.shortLabel} in {weather.locationName}
+              </span>
+            ) : null}
+          </div>
+          <h1>Plan around the weather.</h1>
           <p className="intro">
-            Search any city to see live conditions, date-based forecasts, air quality,
-            and the best window for getting outside.
+            Search a city, choose a date, and read the day at a glance without wading
+            through a landing page.
           </p>
+
+          {weather ? (
+            <div className="hero-highlights">
+              <article className="highlight-chip">
+                <span className="highlight-label">Selected day</span>
+                <strong>{weather.selection.displayDate}</strong>
+              </article>
+              <article className="highlight-chip">
+                <span className="highlight-label">Temperature range</span>
+                <strong>
+                  {weather.today.high}&deg; / {weather.today.low}&deg;
+                </strong>
+              </article>
+              <article className="highlight-chip">
+                <span className="highlight-label">Outdoor score</span>
+                <strong>{weather.outdoorScore.value}/100</strong>
+              </article>
+            </div>
+          ) : null}
         </div>
 
         <div className="hero-controls">
