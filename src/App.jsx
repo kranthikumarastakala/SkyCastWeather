@@ -13,6 +13,65 @@ const airQualityBaseUrl = "https://air-quality-api.open-meteo.com/v1/air-quality
 const recentLocationsStorageKey = "skycast-recent-locations";
 const maxPastWeatherDays = 92;
 const maxFutureWeatherDays = 16;
+const usStateAbbreviations = {
+  Alabama: "AL",
+  Alaska: "AK",
+  Arizona: "AZ",
+  Arkansas: "AR",
+  California: "CA",
+  Colorado: "CO",
+  Connecticut: "CT",
+  Delaware: "DE",
+  Florida: "FL",
+  Georgia: "GA",
+  Hawaii: "HI",
+  Idaho: "ID",
+  Illinois: "IL",
+  Indiana: "IN",
+  Iowa: "IA",
+  Kansas: "KS",
+  Kentucky: "KY",
+  Louisiana: "LA",
+  Maine: "ME",
+  Maryland: "MD",
+  Massachusetts: "MA",
+  Michigan: "MI",
+  Minnesota: "MN",
+  Mississippi: "MS",
+  Missouri: "MO",
+  Montana: "MT",
+  Nebraska: "NE",
+  Nevada: "NV",
+  "New Hampshire": "NH",
+  "New Jersey": "NJ",
+  "New Mexico": "NM",
+  "New York": "NY",
+  "North Carolina": "NC",
+  "North Dakota": "ND",
+  Ohio: "OH",
+  Oklahoma: "OK",
+  Oregon: "OR",
+  Pennsylvania: "PA",
+  "Rhode Island": "RI",
+  "South Carolina": "SC",
+  "South Dakota": "SD",
+  Tennessee: "TN",
+  Texas: "TX",
+  Utah: "UT",
+  Vermont: "VT",
+  Virginia: "VA",
+  Washington: "WA",
+  "West Virginia": "WV",
+  Wisconsin: "WI",
+  Wyoming: "WY",
+  "District of Columbia": "DC",
+  "Puerto Rico": "PR",
+  Guam: "GU",
+  "American Samoa": "AS",
+  "Northern Mariana Islands": "MP",
+  "United States Virgin Islands": "VI",
+  "U.S. Virgin Islands": "VI",
+};
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -114,11 +173,63 @@ function buildDateWindow(selectedDate, minDate, maxDate, windowSize = 5) {
 }
 
 function buildLocationLabel(location) {
-  return [location.name, location.admin1, location.country].filter(Boolean).join(", ");
+  return [location.name, getAdminAreaLabel(location), location.country].filter(Boolean).join(", ");
 }
 
 function normalizeLocationText(value) {
   return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isUnitedStatesLocation(location) {
+  if (!location) {
+    return false;
+  }
+
+  if (typeof location.country_code === "string" && location.country_code.toUpperCase() === "US") {
+    return true;
+  }
+
+  const normalizedCountry = normalizeLocationText(location.country ?? "");
+  return (
+    normalizedCountry === "united states" ||
+    normalizedCountry === "united states of america" ||
+    normalizedCountry === "usa" ||
+    normalizedCountry === "us"
+  );
+}
+
+function getAdminAreaLabel(location) {
+  if (!location?.admin1 || !isUnitedStatesLocation(location)) {
+    return location?.admin1;
+  }
+
+  return usStateAbbreviations[location.admin1] ?? location.admin1;
+}
+
+function normalizeStoredLocationLabel(label) {
+  if (typeof label !== "string") {
+    return label;
+  }
+
+  const parts = label.split(",").map((part) => part.trim()).filter(Boolean);
+
+  if (parts.length < 3) {
+    return label;
+  }
+
+  const country = parts[parts.length - 1];
+  const adminAreaIndex = parts.length - 2;
+  const abbreviation = isUnitedStatesLocation({ country })
+    ? usStateAbbreviations[parts[adminAreaIndex]]
+    : null;
+
+  if (!abbreviation) {
+    return label;
+  }
+
+  const normalizedParts = [...parts];
+  normalizedParts[adminAreaIndex] = abbreviation;
+  return normalizedParts.join(", ");
 }
 
 function loadRecentLocationsFromStorage() {
@@ -134,7 +245,18 @@ function loadRecentLocationsFromStorage() {
     }
 
     const parsedValue = JSON.parse(rawValue);
-    return Array.isArray(parsedValue) ? parsedValue.slice(0, 6) : [];
+
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+
+    return parsedValue
+      .filter((location) => location && typeof location === "object")
+      .slice(0, 6)
+      .map((location) => ({
+        ...location,
+        label: normalizeStoredLocationLabel(location.label),
+      }));
   } catch {
     return [];
   }
@@ -158,14 +280,47 @@ function mergeRecentLocations(existingLocations, nextLocation) {
 
 function buildLocationVariants(location) {
   const variants = [
-    [location.name, location.admin1, location.country],
-    [location.name, location.admin2, location.admin1, location.country],
-    [location.name, location.admin3, location.admin2, location.admin1, location.country],
-    [location.name, location.country],
-    [location.name],
+    { parts: [location.name, location.admin1, location.country], adminAreaIndex: 1 },
+    { parts: [location.name, location.admin2, location.admin1, location.country], adminAreaIndex: 2 },
+    {
+      parts: [location.name, location.admin3, location.admin2, location.admin1, location.country],
+      adminAreaIndex: 3,
+    },
+    { parts: [location.name, location.country], adminAreaIndex: -1 },
+    { parts: [location.name], adminAreaIndex: -1 },
   ];
 
-  return [...new Set(variants.map((parts) => parts.filter(Boolean).join(", ")).filter(Boolean))];
+  const adminAreaLabel = getAdminAreaLabel(location);
+
+  return [
+    ...new Set(
+      variants
+        .flatMap(({ parts, adminAreaIndex }) => {
+          const compactParts = parts.filter(Boolean);
+
+          if (!compactParts.length) {
+            return [];
+          }
+
+          const labels = [compactParts.join(", ")];
+          const hasAdminArea = adminAreaIndex >= 0 && Boolean(parts[adminAreaIndex]);
+
+          if (
+            hasAdminArea &&
+            adminAreaLabel &&
+            adminAreaLabel !== location.admin1
+          ) {
+            const compactAdminAreaIndex = parts.slice(0, adminAreaIndex).filter(Boolean).length;
+            const abbreviatedParts = [...compactParts];
+            abbreviatedParts[compactAdminAreaIndex] = adminAreaLabel;
+            labels.push(abbreviatedParts.join(", "));
+          }
+
+          return labels;
+        })
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function findMatchingLocation(query, locations) {
@@ -182,6 +337,7 @@ function findMatchingLocation(query, locations) {
       const searchableParts = [
         location.name,
         location.admin1,
+        getAdminAreaLabel(location),
         location.admin2,
         location.admin3,
         location.country,
@@ -1070,134 +1226,155 @@ export default function App() {
       <div className="aurora aurora-two" />
 
       <section className="hero-card">
-        <div className="hero-copy">
-          <div className="brand-row">
-            <p className="eyebrow">SkyCast</p>
-            {weather ? (
-              <span className="hero-status">
-                {weather.selection.shortLabel} in {weather.locationName}
-              </span>
-            ) : null}
-          </div>
-          <h1>Plan around the weather.</h1>
-          <p className="intro">
-            Search a city, choose a date, and read the day at a glance without wading
-            through a landing page.
-          </p>
-
-          {weather ? (
-            <div className="hero-highlights">
-              <article className="highlight-chip">
-                <span className="highlight-label">Selected day</span>
-                <strong>{weather.selection.displayDate}</strong>
-              </article>
-              <article className="highlight-chip">
-                <span className="highlight-label">Temperature range</span>
-                <strong>
-                  {weather.today.high}&deg; / {weather.today.low}&deg;
-                </strong>
-              </article>
-              <article className="highlight-chip">
-                <span className="highlight-label">Outdoor score</span>
-                <strong>{weather.outdoorScore.value}/100</strong>
-              </article>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="hero-controls">
-          <form className="search-bar" onSubmit={handleSearchSubmit}>
-            <label className="sr-only" htmlFor="city-search">
-              Search city
-            </label>
-            <input
-              id="city-search"
-              type="text"
-              list="location-suggestions"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search city"
-              autoComplete="off"
-            />
-            <datalist id="location-suggestions">
-              {suggestions.map((location) => {
-                const label = buildLocationLabel(location);
-
-                return <option key={`${location.id}-${location.latitude}-${location.longitude}`} value={label} />;
-              })}
-            </datalist>
-
-            <button type="submit" disabled={loading}>
-              {loading ? "Loading..." : "Search"}
-            </button>
-          </form>
-
-          <div className="date-toolbar">
-            <div className="date-field">
-              <label htmlFor="weather-date">Choose a date</label>
-              <input
-                id="weather-date"
-                type="date"
-                value={selectedDate}
-                min={minSelectableDate}
-                max={maxSelectableDate}
-                onChange={(event) => handleDateSelection(event.target.value)}
-              />
-            </div>
-
-            <div className="date-button-row">
-              <button
-                className="date-button"
-                type="button"
-                onClick={() => handleDateSelection(shiftIsoDate(selectedDate, -1))}
-                disabled={loading || selectedDate === minSelectableDate}
-              >
-                Previous day
-              </button>
-              <button
-                className="date-button"
-                type="button"
-                onClick={() => handleDateSelection(todayDate)}
-                disabled={loading || selectedDate === todayDate}
-              >
-                Today
-              </button>
-              <button
-                className="date-button"
-                type="button"
-                onClick={() => handleDateSelection(shiftIsoDate(selectedDate, 1))}
-                disabled={loading || selectedDate === maxSelectableDate}
-              >
-                Next day
-              </button>
-            </div>
-          </div>
-
-          <p className="date-hint">
-            Browse weather from {formatFullDisplayDate(minSelectableDate)} through{" "}
-            {formatFullDisplayDate(maxSelectableDate)}.
-          </p>
-
-          <div className="hero-actions">
-            <button className="location-button" type="button" onClick={handleUseCurrentLocation}>
-              Use my location
-            </button>
-
-            {recentLocations.length ? (
-              <div className="recent-strip">
-                <span className="recent-label">Recent</span>
-                {recentLocations.map((location) => (
-                  <button
-                    className="recent-chip"
-                    key={`${location.label}-${location.latitude}-${location.longitude}`}
-                    type="button"
-                    onClick={() => handleRecentLocationSelect(location)}
-                  >
-                    {location.label}
-                  </button>
-                ))}
+        <div className="row g-4 align-items-start">
+          <div className="col-12 col-xl-6">
+            <div className="hero-copy">
+              <div className="brand-row">
+                <p className="eyebrow">SkyCast</p>
+                {weather ? (
+                  <span className="hero-status">
+                    {weather.selection.shortLabel} in {weather.locationName}
+                  </span>
+                ) : null}
               </div>
-            ) : null}
+              <h1>Plan around the weather.</h1>
+              <p className="intro">
+                Search a city, choose a date, and read the day at a glance without wading
+                through a landing page.
+              </p>
+
+              {weather ? (
+                <div className="hero-highlights">
+                  <article className="highlight-chip">
+                    <span className="highlight-label">Selected day</span>
+                    <strong>{weather.selection.displayDate}</strong>
+                  </article>
+                  <article className="highlight-chip">
+                    <span className="highlight-label">Temperature range</span>
+                    <strong>
+                      {weather.today.high}&deg; / {weather.today.low}&deg;
+                    </strong>
+                  </article>
+                  <article className="highlight-chip">
+                    <span className="highlight-label">Outdoor score</span>
+                    <strong>{weather.outdoorScore.value}/100</strong>
+                  </article>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="col-12 col-xl-6">
+            <div className="hero-controls">
+              <form className="search-bar row g-2 align-items-stretch" onSubmit={handleSearchSubmit}>
+                <div className="col-12 col-sm">
+                  <label className="sr-only" htmlFor="city-search">
+                    Search city
+                  </label>
+                  <input
+                    id="city-search"
+                    type="text"
+                    list="location-suggestions"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search city"
+                    autoComplete="off"
+                  />
+                  <datalist id="location-suggestions">
+                    {suggestions.map((location) => {
+                      const label = buildLocationLabel(location);
+
+                      return (
+                        <option
+                          key={`${location.id}-${location.latitude}-${location.longitude}`}
+                          value={label}
+                        />
+                      );
+                    })}
+                  </datalist>
+                </div>
+
+                <div className="col-12 col-sm-auto">
+                  <button className="w-100" type="submit" disabled={loading}>
+                    {loading ? "Loading..." : "Search"}
+                  </button>
+                </div>
+              </form>
+
+              <div className="date-toolbar">
+                <div className="date-field">
+                  <label htmlFor="weather-date">Choose a date</label>
+                  <input
+                    id="weather-date"
+                    type="date"
+                    value={selectedDate}
+                    min={minSelectableDate}
+                    max={maxSelectableDate}
+                    onChange={(event) => handleDateSelection(event.target.value)}
+                  />
+                </div>
+
+                <div className="date-button-row row g-2">
+                  <div className="col-12 col-sm-4">
+                    <button
+                      className="date-button w-100"
+                      type="button"
+                      onClick={() => handleDateSelection(shiftIsoDate(selectedDate, -1))}
+                      disabled={loading || selectedDate === minSelectableDate}
+                    >
+                      Previous day
+                    </button>
+                  </div>
+                  <div className="col-12 col-sm-4">
+                    <button
+                      className="date-button w-100"
+                      type="button"
+                      onClick={() => handleDateSelection(todayDate)}
+                      disabled={loading || selectedDate === todayDate}
+                    >
+                      Today
+                    </button>
+                  </div>
+                  <div className="col-12 col-sm-4">
+                    <button
+                      className="date-button w-100"
+                      type="button"
+                      onClick={() => handleDateSelection(shiftIsoDate(selectedDate, 1))}
+                      disabled={loading || selectedDate === maxSelectableDate}
+                    >
+                      Next day
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <p className="date-hint">
+                Browse weather from {formatFullDisplayDate(minSelectableDate)} through{" "}
+                {formatFullDisplayDate(maxSelectableDate)}.
+              </p>
+
+              <div className="hero-actions">
+                <button className="location-button" type="button" onClick={handleUseCurrentLocation}>
+                  Use my location
+                </button>
+
+                {recentLocations.length ? (
+                  <div className="recent-strip">
+                    <span className="recent-label">Recent</span>
+                    {recentLocations.map((location) => (
+                      <button
+                        className="recent-chip"
+                        key={`${location.label}-${location.latitude}-${location.longitude}`}
+                        type="button"
+                        onClick={() => handleRecentLocationSelect(location)}
+                      >
+                        {location.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -1263,165 +1440,182 @@ export default function App() {
           </section>
 
           <section className="signal-grid">
-            <article className="signal-card score-card surface">
-              <p className="section-label">Outdoor Score</p>
-              <div className="score-value">
-                <strong>{weather.outdoorScore.value}</strong>
-                <span>{weather.outdoorScore.label}</span>
+            <div className="row g-3">
+              <div className="col-12 col-md-6 col-xl-4">
+                <article className="signal-card score-card surface h-100">
+                  <p className="section-label">Outdoor Score</p>
+                  <div className="score-value">
+                    <strong>{weather.outdoorScore.value}</strong>
+                    <span>{weather.outdoorScore.label}</span>
+                  </div>
+                  <p className="signal-copy">{weather.outdoorScore.summary}</p>
+                </article>
               </div>
-              <p className="signal-copy">{weather.outdoorScore.summary}</p>
-            </article>
 
-            <article
-              className={`signal-card air-card surface ${
-                weather.airQuality ? `aqi-${weather.airQuality.details.tone}` : "aqi-unknown"
-              }`}
-            >
-              <p className="section-label">Air Quality</p>
-              {weather.airQuality ? (
-                <>
-                  <div className="air-row">
-                    <strong>{weather.airQuality.aqi}</strong>
-                    <span>{weather.airQuality.details.label}</span>
+              <div className="col-12 col-md-6 col-xl-4">
+                <article
+                  className={`signal-card air-card surface h-100 ${
+                    weather.airQuality ? `aqi-${weather.airQuality.details.tone}` : "aqi-unknown"
+                  }`}
+                >
+                  <p className="section-label">Air Quality</p>
+                  {weather.airQuality ? (
+                    <>
+                      <div className="air-row">
+                        <strong>{weather.airQuality.aqi}</strong>
+                        <span>{weather.airQuality.details.label}</span>
+                      </div>
+                      <p className="signal-copy">
+                        PM2.5 is {weather.airQuality.pm25} ug/m3. {weather.airQuality.details.summary}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="signal-copy">
+                      Air quality is unavailable, but the rest of the forecast is still live.
+                    </p>
+                  )}
+                </article>
+              </div>
+
+              <div className="col-12 col-md-6 col-xl-4">
+                <article className="signal-card daylight-card surface h-100">
+                  <p className="section-label">Daylight Arc</p>
+                  <div className="daylight-track">
+                    <span style={{ width: `${weather.daylight.progress}%` }} />
+                  </div>
+                  <div className="daylight-meta">
+                    <span>Sunrise {formatDisplayTime(weather.today.sunrise)}</span>
+                    <span>Sunset {formatDisplayTime(weather.today.sunset)}</span>
                   </div>
                   <p className="signal-copy">
-                    PM2.5 is {weather.airQuality.pm25} ug/m3. {weather.airQuality.details.summary}
+                    {weather.daylight.message} {weather.today.sunshineHours} of likely sunshine today.
                   </p>
-                </>
-              ) : (
-                <p className="signal-copy">
-                  Air quality is unavailable, but the rest of the forecast is still live.
-                </p>
-              )}
-            </article>
-
-            <article className="signal-card daylight-card surface">
-              <p className="section-label">Daylight Arc</p>
-              <div className="daylight-track">
-                <span style={{ width: `${weather.daylight.progress}%` }} />
+                </article>
               </div>
-              <div className="daylight-meta">
-                <span>Sunrise {formatDisplayTime(weather.today.sunrise)}</span>
-                <span>Sunset {formatDisplayTime(weather.today.sunset)}</span>
-              </div>
-              <p className="signal-copy">
-                {weather.daylight.message} {weather.today.sunshineHours} of likely sunshine today.
-              </p>
-            </article>
+            </div>
           </section>
 
           <section className="studio-grid">
-            <article className="timeline-card surface">
-              <div className="card-header">
-                <div>
-                  <p className="section-label">Weather Studio</p>
-                  <h3>{weather.selection.studioHeading}</h3>
-                </div>
-                <div className="window-pill">
-                  {weather.bestWindow
-                    ? `Best window ${formatHourLabel(weather.bestWindow.time)}`
-                    : "Watching the next move"}
-                </div>
-              </div>
-
-              {sparkline ? (
-                <div className="sparkline-shell">
-                  <svg
-                    className="sparkline"
-                    viewBox="0 0 480 160"
-                    preserveAspectRatio="none"
-                    aria-hidden="true"
-                  >
-                    <path className="sparkline-area" d={sparkline.area} />
-                    <path className="sparkline-line" d={sparkline.line} />
-                  </svg>
-                  <div className="sparkline-scale">
-                    <span>{sparkline.min}&deg;C</span>
-                    <span>{sparkline.max}&deg;C</span>
+            <div className="row g-3">
+              <div className="col-12 col-xl-7">
+                <article className="timeline-card surface h-100">
+                  <div className="card-header">
+                    <div>
+                      <p className="section-label">Weather Studio</p>
+                      <h3>{weather.selection.studioHeading}</h3>
+                    </div>
+                    <div className="window-pill">
+                      {weather.bestWindow
+                        ? `Best window ${formatHourLabel(weather.bestWindow.time)}`
+                        : "Watching the next move"}
+                    </div>
                   </div>
-                </div>
-              ) : null}
 
-              <div className="hourly-strip">
-                {weather.hourly.slice(0, 12).map((hour) => {
-                  const details = getWeatherDetails(hour.weatherCode);
+                  {sparkline ? (
+                    <div className="sparkline-shell">
+                      <svg
+                        className="sparkline"
+                        viewBox="0 0 480 160"
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        <path className="sparkline-area" d={sparkline.area} />
+                        <path className="sparkline-line" d={sparkline.line} />
+                      </svg>
+                      <div className="sparkline-scale">
+                        <span>{sparkline.min}&deg;C</span>
+                        <span>{sparkline.max}&deg;C</span>
+                      </div>
+                    </div>
+                  ) : null}
 
-                  return (
-                    <article className="hour-card" key={hour.time}>
-                      <p className="hour-time">{formatHourLabel(hour.time)}</p>
-                      <strong className="hour-temp">{hour.temperature}&deg;</strong>
-                      <span className="hour-label">{details.label}</span>
-                      <span className="hour-meta">Rain {hour.precipitationChance}%</span>
-                      <span className="hour-meta">Wind {hour.windSpeed} km/h</span>
-                      <span className="hour-meta">
-                        AQI {hour.aqi != null ? Math.round(hour.aqi) : "--"}
-                      </span>
-                    </article>
-                  );
-                })}
+                  <div className="hourly-strip">
+                    {weather.hourly.slice(0, 12).map((hour) => {
+                      const details = getWeatherDetails(hour.weatherCode);
+
+                      return (
+                        <article className="hour-card" key={hour.time}>
+                          <p className="hour-time">{formatHourLabel(hour.time)}</p>
+                          <strong className="hour-temp">{hour.temperature}&deg;</strong>
+                          <span className="hour-label">{details.label}</span>
+                          <span className="hour-meta">Rain {hour.precipitationChance}%</span>
+                          <span className="hour-meta">Wind {hour.windSpeed} km/h</span>
+                          <span className="hour-meta">
+                            AQI {hour.aqi != null ? Math.round(hour.aqi) : "--"}
+                          </span>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </article>
               </div>
-            </article>
 
-            <article className="concierge-card surface">
-              <div className="card-header">
-                <div>
-                  <p className="section-label">Weather Concierge</p>
-                  <h3>Make the day feel easier</h3>
-                </div>
+              <div className="col-12 col-xl-5">
+                <article className="concierge-card surface h-100">
+                  <div className="card-header">
+                    <div>
+                      <p className="section-label">Weather Concierge</p>
+                      <h3>Make the day feel easier</h3>
+                    </div>
+                  </div>
+
+                  <p className="concierge-lead">
+                    {weather.bestWindow
+                      ? `${
+                          weather.selection.isToday
+                            ? "Your strongest outside window is around"
+                            : `On ${weather.selection.displayDate}, the strongest outside window looks to be around`
+                        } ${formatHourLabel(
+                          weather.bestWindow.time,
+                        )}, when the conditions look most comfortable.`
+                      : weather.selection.isToday
+                        ? "Conditions are moving around, so it is worth another look later today."
+                        : "This day stays a little more mixed, so it helps to keep plans flexible."}
+                  </p>
+
+                  <div className="concierge-list">
+                    {weather.concierge.map((item) => (
+                      <article className="concierge-item" key={item.title}>
+                        <p className="concierge-title">{item.title}</p>
+                        <p>{item.body}</p>
+                      </article>
+                    ))}
+                  </div>
+                </article>
               </div>
-
-              <p className="concierge-lead">
-                {weather.bestWindow
-                  ? `${
-                      weather.selection.isToday
-                        ? "Your strongest outside window is around"
-                        : `On ${weather.selection.displayDate}, the strongest outside window looks to be around`
-                    } ${formatHourLabel(
-                      weather.bestWindow.time,
-                    )}, when the conditions look most comfortable.`
-                  : weather.selection.isToday
-                    ? "Conditions are moving around, so it is worth another look later today."
-                    : "This day stays a little more mixed, so it helps to keep plans flexible."}
-              </p>
-
-              <div className="concierge-list">
-                {weather.concierge.map((item) => (
-                  <article className="concierge-item" key={item.title}>
-                    <p className="concierge-title">{item.title}</p>
-                    <p>{item.body}</p>
-                  </article>
-                ))}
-              </div>
-            </article>
+            </div>
           </section>
 
           <section className="forecast-grid">
-            {weather.forecast.map((day, index) => {
-              const details = getWeatherDetails(day.weatherCode);
-              const isActiveDay = day.date === weather.selection.date;
+            <div className="row g-3">
+              {weather.forecast.map((day, index) => {
+                const details = getWeatherDetails(day.weatherCode);
+                const isActiveDay = day.date === weather.selection.date;
 
-              return (
-                <button
-                  className={`forecast-card ${isActiveDay ? "is-active" : ""}`}
-                  key={day.date}
-                  type="button"
-                  style={{ animationDelay: `${index * 90}ms` }}
-                  onClick={() => handleDateSelection(day.date)}
-                  aria-pressed={isActiveDay}
-                >
-                  <p className="forecast-date">{formatDisplayDate(day.date)}</p>
-                  <h3>{details.label}</h3>
-                  <p className="forecast-temp">
-                    {day.high}&deg; / {day.low}&deg;
-                  </p>
-                  <p className="forecast-meta">Rain chance: {day.precipitationChance}%</p>
-                  <p className="forecast-meta">Rain total: {day.precipitationTotal} mm</p>
-                  <p className="forecast-meta">UV max: {day.uvMax}</p>
-                  <p className="forecast-meta">Wind max: {day.windMax} km/h</p>
-                  <p className="forecast-meta">Sunshine: {day.sunshineHours}</p>
-                </button>
-              );
-            })}
+                return (
+                  <div className="col-12 col-sm-6 col-lg-4 col-xl-3" key={day.date}>
+                    <button
+                      className={`forecast-card h-100 w-100 ${isActiveDay ? "is-active" : ""}`}
+                      type="button"
+                      style={{ animationDelay: `${index * 90}ms` }}
+                      onClick={() => handleDateSelection(day.date)}
+                      aria-pressed={isActiveDay}
+                    >
+                      <p className="forecast-date">{formatDisplayDate(day.date)}</p>
+                      <h3>{details.label}</h3>
+                      <p className="forecast-temp">
+                        {day.high}&deg; / {day.low}&deg;
+                      </p>
+                      <p className="forecast-meta">Rain chance: {day.precipitationChance}%</p>
+                      <p className="forecast-meta">Rain total: {day.precipitationTotal} mm</p>
+                      <p className="forecast-meta">UV max: {day.uvMax}</p>
+                      <p className="forecast-meta">Wind max: {day.windMax} km/h</p>
+                      <p className="forecast-meta">Sunshine: {day.sunshineHours}</p>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </section>
 
           <p className="data-note">
