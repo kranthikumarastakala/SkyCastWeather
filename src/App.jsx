@@ -5,6 +5,13 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  createGooglePlacesSessionToken,
+  fetchGooglePlaceSuggestions,
+  isGooglePlacesConfigured,
+  resolveGooglePlacePrediction,
+} from "./googlePlaces";
+import LocationAutocompleteInput from "./components/LocationAutocompleteInput";
 import PremiumDatePicker from "./components/PremiumDatePicker";
 import { getWeatherDetails } from "./weatherCodes";
 
@@ -175,6 +182,65 @@ function buildDateWindow(selectedDate, minDate, maxDate, windowSize = 5) {
 
 function buildLocationLabel(location) {
   return [location.name, getAdminAreaLabel(location), location.country].filter(Boolean).join(", ");
+}
+
+function buildLocationCaption(location) {
+  return [getAdminAreaLabel(location), location.country].filter(Boolean).join(", ");
+}
+
+function buildLocationOptionKey(location) {
+  return `${location.id ?? location.name}-${location.latitude}-${location.longitude}`;
+}
+
+function buildLocationSuggestion(location) {
+  return {
+    key: `open-meteo-${buildLocationOptionKey(location)}`,
+    label: buildLocationLabel(location),
+    title: location.name ?? buildLocationLabel(location),
+    caption: buildLocationCaption(location),
+    searchTerms: buildLocationVariants(location),
+    source: "open-meteo",
+    location,
+  };
+}
+
+function buildGooglePlaceSuggestion(suggestion) {
+  const prediction = suggestion.placePrediction;
+
+  if (!prediction) {
+    return null;
+  }
+
+  const fullText = prediction.text?.toString?.() ?? "";
+  const mainText = prediction.mainText?.toString?.() ?? fullText;
+  const secondaryText = prediction.secondaryText?.toString?.() ?? "";
+  const label = fullText || [mainText, secondaryText].filter(Boolean).join(", ");
+
+  return {
+    key: `google-${prediction.placeId}`,
+    label,
+    title: mainText || label,
+    caption: secondaryText,
+    searchTerms: [label, mainText, secondaryText].filter(Boolean),
+    source: "google",
+    placePrediction: prediction,
+  };
+}
+
+function buildSuggestionLabel(suggestion) {
+  return suggestion.label;
+}
+
+function buildSuggestionTitle(suggestion) {
+  return suggestion.title || suggestion.label;
+}
+
+function buildSuggestionCaption(suggestion) {
+  return suggestion.caption || "";
+}
+
+function buildSuggestionKey(suggestion) {
+  return suggestion.key;
 }
 
 function normalizeLocationText(value) {
@@ -350,6 +416,60 @@ function findMatchingLocation(query, locations) {
     }) ??
     null
   );
+}
+
+function findBestLocationSuggestion(query, suggestions) {
+  const normalizedQuery = normalizeLocationText(query);
+
+  if (!normalizedQuery || !suggestions.length) {
+    return null;
+  }
+
+  return (
+    suggestions.find((suggestion) =>
+      (suggestion.searchTerms ?? [suggestion.label]).some(
+        (term) => normalizeLocationText(term) === normalizedQuery,
+      ),
+    ) ??
+    suggestions.find((suggestion) =>
+      normalizeLocationText(suggestion.label).startsWith(normalizedQuery),
+    ) ??
+    suggestions.find((suggestion) =>
+      normalizeLocationText(suggestion.label).includes(normalizedQuery),
+    ) ??
+    suggestions[0] ??
+    null
+  );
+}
+
+async function resolveLocationSuggestion(suggestion, signal) {
+  if (!suggestion) {
+    return null;
+  }
+
+  if (suggestion.source === "open-meteo") {
+    return suggestion.location;
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }
+
+  if (suggestion.source === "google" && suggestion.placePrediction) {
+    const coordinates = await resolveGooglePlacePrediction(suggestion.placePrediction);
+
+    if (signal?.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    return {
+      name: suggestion.label,
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+    };
+  }
+
+  return null;
 }
 
 function getCompassDirection(degrees) {
@@ -909,6 +1029,85 @@ function buildConciergeItems(current, today, airQualityDetails, bestWindow, outd
       body: `${airCopy} UV peaks near ${today.uvMax}, so midday exposure deserves some respect.`,
     },
   ];
+}
+
+function useLocationSuggestions(query) {
+  const deferredQuery = useDeferredValue(query);
+  const [suggestions, setSuggestions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const activeSuggestionRequest = useRef(0);
+  const sessionTokenRef = useRef(null);
+
+  useEffect(() => {
+    const trimmedQuery = deferredQuery.trim();
+
+    if (trimmedQuery.length < 2) {
+      activeSuggestionRequest.current += 1;
+      setSuggestions([]);
+      setLoading(false);
+      return;
+    }
+
+    const requestId = activeSuggestionRequest.current + 1;
+    activeSuggestionRequest.current = requestId;
+    setLoading(true);
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        let nextSuggestions = [];
+
+        if (isGooglePlacesConfigured()) {
+          if (!sessionTokenRef.current) {
+            sessionTokenRef.current = await createGooglePlacesSessionToken();
+          }
+
+          const googleSuggestions = await fetchGooglePlaceSuggestions(
+            trimmedQuery,
+            sessionTokenRef.current,
+          );
+          nextSuggestions = googleSuggestions
+            .map(buildGooglePlaceSuggestion)
+            .filter(Boolean);
+        }
+
+        if (!nextSuggestions.length) {
+          const results = await fetchLocationsByQuery(trimmedQuery, 8);
+          nextSuggestions = results.map(buildLocationSuggestion);
+        }
+
+        if (activeSuggestionRequest.current !== requestId) {
+          return;
+        }
+
+        startTransition(() => {
+          setSuggestions(nextSuggestions);
+        });
+      } catch (suggestionError) {
+        if (activeSuggestionRequest.current === requestId) {
+          startTransition(() => {
+            setSuggestions([]);
+          });
+          sessionTokenRef.current = null;
+        }
+      } finally {
+        if (activeSuggestionRequest.current === requestId) {
+          setLoading(false);
+        }
+      }
+    }, 220);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [deferredQuery]);
+
+  return {
+    suggestions,
+    loading,
+    resetSessionToken() {
+      sessionTokenRef.current = null;
+    },
+  };
 }
 
 function calculateDistanceInKilometers(fromCoordinates, toCoordinates) {
@@ -1879,13 +2078,29 @@ export default function App() {
     to: "",
     date: todayDate,
   });
-  const [suggestions, setSuggestions] = useState([]);
+  const [tripSelections, setTripSelections] = useState({
+    from: null,
+    to: null,
+  });
   const [recentLocations, setRecentLocations] = useState(loadRecentLocationsFromStorage);
   const [activeLocation, setActiveLocation] = useState(null);
   const activeRequest = useRef(null);
-  const activeSuggestionRequest = useRef(null);
   const activeTripRequest = useRef(null);
-  const deferredQuery = useDeferredValue(query);
+  const {
+    suggestions: searchSuggestions,
+    loading: searchSuggestionsLoading,
+    resetSessionToken: resetSearchSessionToken,
+  } = useLocationSuggestions(query);
+  const {
+    suggestions: tripFromSuggestions,
+    loading: tripFromSuggestionsLoading,
+    resetSessionToken: resetTripFromSessionToken,
+  } = useLocationSuggestions(tripForm.from);
+  const {
+    suggestions: tripToSuggestions,
+    loading: tripToSuggestionsLoading,
+    resetSessionToken: resetTripToSessionToken,
+  } = useLocationSuggestions(tripForm.to);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1895,7 +2110,14 @@ export default function App() {
     window.localStorage.setItem(recentLocationsStorageKey, JSON.stringify(recentLocations));
   }, [recentLocations]);
 
-  async function loadWeather({ search, latitude, longitude, sourceLabel, date = selectedDate }) {
+  async function loadWeather({
+    search,
+    latitude,
+    longitude,
+    sourceLabel,
+    suggestion,
+    date = selectedDate,
+  }) {
     activeRequest.current?.abort();
 
     const controller = new AbortController();
@@ -1909,7 +2131,9 @@ export default function App() {
     try {
       let location = null;
 
-      if (typeof latitude === "number" && typeof longitude === "number") {
+      if (suggestion) {
+        location = await resolveLocationSuggestion(suggestion, controller.signal);
+      } else if (typeof latitude === "number" && typeof longitude === "number") {
         location = sourceLabel
           ? { name: sourceLabel }
           : await fetchLocationByCoordinates(latitude, longitude, controller.signal);
@@ -2123,49 +2347,25 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const trimmedQuery = deferredQuery.trim();
+  function handleSearchInputChange(nextValue) {
+    setQuery(nextValue);
+    setError("");
+    setActiveLocation((currentLocation) =>
+      currentLocation &&
+      normalizeLocationText(currentLocation.label) === normalizeLocationText(nextValue)
+        ? currentLocation
+        : null,
+    );
+  }
 
-    if (trimmedQuery.length < 2) {
-      activeSuggestionRequest.current?.abort();
-      activeSuggestionRequest.current = null;
-      setSuggestions([]);
-      return;
-    }
-
-    activeSuggestionRequest.current?.abort();
-
-    const controller = new AbortController();
-    activeSuggestionRequest.current = controller;
-
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        const results = await fetchLocationsByQuery(trimmedQuery, 8, controller.signal);
-        startTransition(() => {
-          setSuggestions(results);
-        });
-      } catch (suggestionError) {
-        if (suggestionError.name !== "AbortError") {
-          startTransition(() => {
-            setSuggestions([]);
-          });
-        }
-      } finally {
-        if (activeSuggestionRequest.current === controller) {
-          activeSuggestionRequest.current = null;
-        }
-      }
-    }, 250);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-      controller.abort();
-
-      if (activeSuggestionRequest.current === controller) {
-        activeSuggestionRequest.current = null;
-      }
-    };
-  }, [deferredQuery]);
+  function handleSearchSuggestionSelect(suggestion) {
+    setQuery(buildSuggestionLabel(suggestion));
+    resetSearchSessionToken();
+    loadWeather({
+      suggestion,
+      date: selectedDate,
+    });
+  }
 
   function handleSearchSubmit(event) {
     event.preventDefault();
@@ -2176,15 +2376,12 @@ export default function App() {
       return;
     }
 
-    const matchedSuggestion = suggestions.find(
-      (location) => buildLocationLabel(location).toLowerCase() === trimmedQuery.toLowerCase(),
-    );
+    const matchedSuggestion = findBestLocationSuggestion(trimmedQuery, searchSuggestions);
 
     if (matchedSuggestion) {
+      resetSearchSessionToken();
       loadWeather({
-        latitude: matchedSuggestion.latitude,
-        longitude: matchedSuggestion.longitude,
-        sourceLabel: buildLocationLabel(matchedSuggestion),
+        suggestion: matchedSuggestion,
         date: selectedDate,
       });
       return;
@@ -2279,10 +2476,44 @@ export default function App() {
   }
 
   function handleTripFieldChange(field, value) {
+    setTripError("");
     setTripForm((currentTripForm) => ({
       ...currentTripForm,
       [field]: value,
     }));
+    setTripSelections((currentSelections) => {
+      const selectedLocation = currentSelections[field];
+
+      if (
+        selectedLocation &&
+        normalizeLocationText(buildSuggestionLabel(selectedLocation)) === normalizeLocationText(value)
+      ) {
+        return currentSelections;
+      }
+
+      return {
+        ...currentSelections,
+        [field]: null,
+      };
+    });
+  }
+
+  function handleTripLocationSelect(field, suggestion) {
+    const label = buildSuggestionLabel(suggestion);
+    setTripForm((currentTripForm) => ({
+      ...currentTripForm,
+      [field]: label,
+    }));
+    setTripSelections((currentSelections) => ({
+      ...currentSelections,
+      [field]: suggestion,
+    }));
+
+    if (field === "from") {
+      resetTripFromSessionToken();
+    } else {
+      resetTripToSessionToken();
+    }
   }
 
   function handleSwapTripLocations() {
@@ -2290,6 +2521,10 @@ export default function App() {
       ...currentTripForm,
       from: currentTripForm.to,
       to: currentTripForm.from,
+    }));
+    setTripSelections((currentSelections) => ({
+      from: currentSelections.to,
+      to: currentSelections.from,
     }));
   }
 
@@ -2317,10 +2552,19 @@ export default function App() {
     setTripError("");
 
     try {
+      const fromSuggestion = tripSelections.from ?? findBestLocationSuggestion(fromQuery, tripFromSuggestions);
+      const toSuggestion = tripSelections.to ?? findBestLocationSuggestion(toQuery, tripToSuggestions);
       const [fromLocation, toLocation] = await Promise.all([
-        resolveLocationByQuery(fromQuery, controller.signal),
-        resolveLocationByQuery(toQuery, controller.signal),
+        fromSuggestion
+          ? resolveLocationSuggestion(fromSuggestion, controller.signal)
+          : resolveLocationByQuery(fromQuery, controller.signal),
+        toSuggestion
+          ? resolveLocationSuggestion(toSuggestion, controller.signal)
+          : resolveLocationByQuery(toQuery, controller.signal),
       ]);
+
+      resetTripFromSessionToken();
+      resetTripToSessionToken();
 
       if (!fromLocation) {
         throw new Error("We could not find the starting location. Try a city, region, or country.");
@@ -2528,23 +2772,49 @@ export default function App() {
                 <form className="trip-form-grid" onSubmit={handleTripSubmit}>
                   <div className="trip-field">
                     <label htmlFor="trip-from">From</label>
-                    <input
+                    <LocationAutocompleteInput
                       id="trip-from"
-                      type="text"
                       value={tripForm.from}
-                      onChange={(event) => handleTripFieldChange("from", event.target.value)}
+                      options={tripFromSuggestions}
+                      loading={tripFromSuggestionsLoading}
+                      onInputValueChange={(nextValue) => handleTripFieldChange("from", nextValue)}
+                      onOptionSelect={(location) => handleTripLocationSelect("from", location)}
+                      buildOptionLabel={buildSuggestionLabel}
+                      buildOptionTitle={buildSuggestionTitle}
+                      buildOptionCaption={buildSuggestionCaption}
+                      buildOptionKey={buildSuggestionKey}
                       placeholder="Starting city"
+                      ariaLabel="Starting city"
+                      disabled={tripLoading}
+                      noOptionsText={
+                        tripForm.from.trim().length < 2
+                          ? "Start typing the departure city"
+                          : "No matching locations"
+                      }
                     />
                   </div>
 
                   <div className="trip-field">
                     <label htmlFor="trip-to">To</label>
-                    <input
+                    <LocationAutocompleteInput
                       id="trip-to"
-                      type="text"
                       value={tripForm.to}
-                      onChange={(event) => handleTripFieldChange("to", event.target.value)}
+                      options={tripToSuggestions}
+                      loading={tripToSuggestionsLoading}
+                      onInputValueChange={(nextValue) => handleTripFieldChange("to", nextValue)}
+                      onOptionSelect={(location) => handleTripLocationSelect("to", location)}
+                      buildOptionLabel={buildSuggestionLabel}
+                      buildOptionTitle={buildSuggestionTitle}
+                      buildOptionCaption={buildSuggestionCaption}
+                      buildOptionKey={buildSuggestionKey}
                       placeholder="Destination city"
+                      ariaLabel="Destination city"
+                      disabled={tripLoading}
+                      noOptionsText={
+                        tripForm.to.trim().length < 2
+                          ? "Start typing the destination city"
+                          : "No matching locations"
+                      }
                     />
                   </div>
 
@@ -2869,27 +3139,26 @@ export default function App() {
                   <label className="sr-only" htmlFor="city-search">
                     Search city
                   </label>
-                  <input
+                  <LocationAutocompleteInput
                     id="city-search"
-                    type="text"
-                    list="location-suggestions"
                     value={query}
-                    onChange={(event) => setQuery(event.target.value)}
+                    options={searchSuggestions}
+                    loading={searchSuggestionsLoading}
+                    onInputValueChange={handleSearchInputChange}
+                    onOptionSelect={handleSearchSuggestionSelect}
+                    buildOptionLabel={buildSuggestionLabel}
+                    buildOptionTitle={buildSuggestionTitle}
+                    buildOptionCaption={buildSuggestionCaption}
+                    buildOptionKey={buildSuggestionKey}
                     placeholder="Search city"
-                    autoComplete="off"
+                    ariaLabel="Search city"
+                    disabled={loading}
+                    noOptionsText={
+                      query.trim().length < 2
+                        ? "Start typing a city or region"
+                        : "No matching locations"
+                    }
                   />
-                  <datalist id="location-suggestions">
-                    {suggestions.map((location) => {
-                      const label = buildLocationLabel(location);
-
-                      return (
-                        <option
-                          key={`${location.id}-${location.latitude}-${location.longitude}`}
-                          value={label}
-                        />
-                      );
-                    })}
-                  </datalist>
                 </div>
 
                 <div className="col-12 col-sm-auto">

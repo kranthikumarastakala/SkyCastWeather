@@ -467,19 +467,69 @@ input {
   margin: 0;
 }
 
-.search-bar input {
-  min-width: 0;
+.location-autocomplete {
   width: 100%;
-  padding: 16px 18px;
-  border: 1px solid var(--border-strong);
-  border-radius: 16px;
-  background: white;
-  color: var(--text);
 }
 
-.search-bar input:focus {
-  outline: 2px solid rgba(29, 111, 165, 0.28);
-  outline-offset: 2px;
+.location-autocomplete .MuiAutocomplete-root,
+.location-autocomplete .MuiFormControl-root,
+.location-autocomplete .MuiTextField-root {
+  width: 100%;
+}
+
+.location-autocomplete-paper.MuiPaper-root {
+  margin-top: 8px;
+  border-radius: 26px !important;
+  border: 1px solid rgba(16, 34, 56, 0.08) !important;
+  background:
+    radial-gradient(circle at top right, rgba(255, 196, 118, 0.15), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.995), rgba(245, 249, 253, 0.96)) !important;
+  box-shadow: 0 24px 48px rgba(13, 34, 56, 0.16) !important;
+  backdrop-filter: blur(16px);
+}
+
+.location-autocomplete-popper .MuiAutocomplete-listbox {
+  padding: 8px;
+}
+
+.location-autocomplete-popper .MuiAutocomplete-option {
+  align-items: stretch;
+  min-height: auto;
+  padding: 0;
+  border-radius: 18px;
+}
+
+.location-autocomplete-popper .MuiAutocomplete-option[aria-selected="true"] {
+  background: rgba(29, 111, 165, 0.08);
+}
+
+.location-autocomplete-popper .MuiAutocomplete-option.Mui-focused,
+.location-autocomplete-popper .MuiAutocomplete-option.Mui-focusVisible {
+  background: rgba(29, 111, 165, 0.1);
+}
+
+.location-autocomplete-popper .MuiAutocomplete-noOptions,
+.location-autocomplete-popper .MuiAutocomplete-loading {
+  padding: 16px 18px;
+  color: var(--muted);
+}
+
+.location-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 14px 16px;
+}
+
+.location-option strong {
+  font-size: 0.97rem;
+  line-height: 1.4;
+}
+
+.location-option span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
 }
 
 .search-bar button,

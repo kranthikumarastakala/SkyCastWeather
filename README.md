@@ -9,6 +9,16 @@ npm install
 npm run dev
 ```
 
+## Google Places autocomplete
+
+The location textboxes can use Google Places autocomplete if you add a Google Maps API key.
+
+1. Copy `.env.example` to `.env.local`.
+2. Set `VITE_GOOGLE_MAPS_API_KEY` to your key.
+3. In Google Cloud, enable `Maps JavaScript API`, `Places API`, and `Places API (New)`.
+
+If the key is missing, the app falls back to its built-in location search so development still works.
+
 ## Deploy to GitHub Pages
 
 1. Create a GitHub repository and push this project to it.
